@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "outDir": "./dist",
     "types": ["node"],
-    "ignoreDeprecations": "5.0"
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*", "drizzle.config.ts"],
   "exclude": ["node_modules"]
