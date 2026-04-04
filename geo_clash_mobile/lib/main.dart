@@ -198,36 +198,28 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   // ── Branding
                   const SizedBox(height: 40),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: const Color(0xFF00F0FF).withOpacity(0.3)),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      'v0.1',
-                      style: GoogleFonts.inter(
-                        fontSize: 10,
-                        color: const Color(0xFF00F0FF).withOpacity(0.6),
-                        letterSpacing: 2,
-                        fontWeight: FontWeight.bold,
-                      ),
+                  Hero(
+                    tag: 'logo',
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      height: 120,
+                      fit: BoxFit.contain,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 24),
                   Text(
                     'GEOCLASH',
                     style: GoogleFonts.inter(
-                      fontSize: 42,
+                      fontSize: 32,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 6,
+                      letterSpacing: 8,
                       color: const Color(0xFF00F0FF),
                     ),
                   ),
                   Container(
                     margin: const EdgeInsets.only(top: 8),
-                    width: 60,
-                    height: 3,
+                    width: 40,
+                    height: 2,
                     decoration: BoxDecoration(
                       color: const Color(0xFF2FF801),
                       borderRadius: BorderRadius.circular(2),
