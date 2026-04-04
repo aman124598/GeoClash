@@ -1,4 +1,4 @@
-package com.example.geo_clash_mobile
+package com.geoclash.app
 
 import io.flutter.embedding.android.FlutterActivity
 
