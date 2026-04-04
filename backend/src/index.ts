@@ -7,10 +7,25 @@ import { auth } from './auth';
 import { toNodeHandler } from "better-auth/node";
 import { latLngToCell } from 'h3-js';
 import { db } from './db';
-import { tiles, users, tileEvents } from './db/schema';
-import { eq, sql, and, asc } from 'drizzle-orm';
-import { activeTrails } from './db/schema';
+import { tiles, users, tileEvents, activeTrails, dailyStats } from './db/schema';
+import { eq, sql, and, asc, desc } from 'drizzle-orm';
 import * as h3 from 'h3-js';
+
+// Helper: Haversine Distance
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3; // metres
+  const φ1 = lat1 * Math.PI/180;
+  const φ2 = lat2 * Math.PI/180;
+  const Δφ = (lat2-lat1) * Math.PI/180;
+  const Δλ = (lon2-lon1) * Math.PI/180;
+
+  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+          Math.cos(φ1) * Math.cos(φ2) *
+          Math.sin(Δλ/2) * Math.sin(Δλ/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+  return R * c; // in metres
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -98,7 +113,40 @@ app.post('/api/capture', async (req, res) => {
     }
 
     const userId = session.user.id;
+    const user = (await db.select().from(users).where(eq(users.id, userId)).limit(1).execute())[0];
+    
+    // Calculate distance since last point
+    const distanceDelta = calculateDistance(lat, lng, (user?.lastLat ?? lat), (user?.lastLng ?? lng));
+    // Sanity check: no one walks > 500m in one tick (usually 5-10s)
+    const validDistanceDelta = distanceDelta < 500 ? distanceDelta : 0;
+
     const h3Index = h3.latLngToCell(lat, lng, 10);
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Update Global and Daily stats
+    await db.transaction(async (tx) => {
+        // 1. Update Global User data
+        await tx.update(users).set({ 
+            totalDistance: sql`${users.totalDistance} + ${validDistanceDelta}`,
+            lastLat: lat,
+            lastLng: lng,
+            lastActiveAt: new Date()
+        }).where(eq(users.id, userId));
+
+        // 2. Upsert Daily stats
+        await tx.insert(dailyStats).values({
+            userId,
+            date: today,
+            distanceTraveled: validDistanceDelta,
+            tilesCaptured: 0,
+        }).onConflictDoUpdate({
+            target: [dailyStats.userId, dailyStats.date],
+            set: {
+                distanceTraveled: sql`${dailyStats.distanceTraveled} + ${validDistanceDelta}`,
+                updatedAt: new Date()
+            }
+        });
+    });
 
     // 1. Check if this completes a loop
     const existingTrail = await db.select()
@@ -202,19 +250,23 @@ app.get('/api/user/stats', async (req, res) => {
     if (!session) return res.status(401).json({ error: 'Unauthorized' });
 
     const userId = session.user.id;
-    const user = await db.select().from(users).where(eq(users.id, userId)).limit(1).execute();
+    const today = new Date().toISOString().split('T')[0];
+    const user = (await db.select().from(users).where(eq(users.id, userId)).limit(1).execute())[0];
     
-    if (user.length === 0) return res.status(404).json({ error: 'User not found' });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const todayStats = (await db.select().from(dailyStats).where(and(eq(dailyStats.userId, userId), eq(dailyStats.date, today))).limit(1).execute())[0];
 
     // Calculate rank
     const allUsers = await db.select({ id: users.id, totalTiles: users.totalTiles })
-      .from(users).orderBy(sql`${users.totalTiles} DESC`).execute();
+      .from(users).orderBy(desc(users.totalTiles)).execute();
     const rank = allUsers.findIndex(u => u.id === userId) + 1;
 
     res.json({
       success: true,
       stats: {
-        ...user[0],
+        ...user,
+        todayDistance: todayStats?.distanceTraveled || 0,
         rank,
         totalPlayers: allUsers.length
       }

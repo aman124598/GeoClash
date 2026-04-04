@@ -838,7 +838,15 @@ class _MainConsoleState extends State<MainConsole> {
   // ─── MISSIONS VIEW ────────────────────────────────────────
   Widget _buildMissionsView() {
     final missions = _missions ?? [];
+    final stats = _userStats ?? {};
+    final double todayDist = ((stats['todayDistance'] ?? 0) as num).toDouble();
+    final int todaySteps = (todayDist * 1.3).toInt();
+
     return _buildPageView('Missions', [
+      _buildCard('Daily Activity', '$todaySteps Steps • ${(todayDist/1000).toStringAsFixed(2)} km today', Icons.directions_run),
+      const SizedBox(height: 10),
+      Text('ACTIVE MISSIONS', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.white38, letterSpacing: 2)),
+      const SizedBox(height: 16),
       if (missions.isEmpty)
         _buildCard('No Missions', 'Start capturing to unlock active missions.', Icons.assignment_outlined)
       else

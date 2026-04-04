@@ -1,4 +1,4 @@
-import { pgTable, text, integer, real, timestamp, bigint, date, index, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, real, timestamp, bigint, date, index, boolean, unique } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
   id: text('id').primaryKey(),
@@ -14,6 +14,8 @@ export const users = pgTable('users', {
   currentStreak: integer('currentStreak').default(0),
   longestStreak: integer('longestStreak').default(0),
   lastActiveAt: timestamp('lastActiveAt', { mode: 'date' }),
+  lastLat: real('last_lat'),
+  lastLng: real('last_lng'),
 });
 
 export const sessions = pgTable('sessions', {
@@ -83,4 +85,16 @@ export const activeTrails = pgTable('active_trails', {
 }, (t) => ({
   userH3Idx: index('active_trail_user_h3_idx').on(t.userId, t.h3Index),
   userOrderIdx: index('active_trail_user_order_idx').on(t.userId, t.id),
+}));
+
+export const dailyStats = pgTable('daily_stats', {
+  id: bigint('id', { mode: 'bigint' }).primaryKey().generatedAlwaysAsIdentity(),
+  userId: text('user_id').notNull().references(() => users.id),
+  date: date('date').notNull(), // format YYYY-MM-DD
+  tilesCaptured: integer('tiles_captured').default(0),
+  distanceTraveled: real('distance_traveled').default(0),
+  updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow(),
+}, (t) => ({
+  userDateIdx: index('daily_user_date_idx').on(t.userId, t.date),
+  uniqueUserDate: unique('unique_user_date').on(t.userId, t.date),
 }));
