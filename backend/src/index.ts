@@ -195,10 +195,81 @@ app.post('/api/capture', async (req, res) => {
   }
 });
 
+// GET User Stats
+app.get('/api/user/stats', async (req, res) => {
+  try {
+    const session = await auth.api.getSession({ headers: req.headers });
+    if (!session) return res.status(401).json({ error: 'Unauthorized' });
+
+    const userId = session.user.id;
+    const user = await db.select().from(users).where(eq(users.id, userId)).limit(1).execute();
+    
+    if (user.length === 0) return res.status(404).json({ error: 'User not found' });
+
+    // Calculate rank
+    const allUsers = await db.select({ id: users.id, totalTiles: users.totalTiles })
+      .from(users).orderBy(sql`${users.totalTiles} DESC`).execute();
+    const rank = allUsers.findIndex(u => u.id === userId) + 1;
+
+    res.json({
+      success: true,
+      stats: {
+        ...user[0],
+        rank,
+        totalPlayers: allUsers.length
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET User Missions (Real-time generated based on stats)
+app.get('/api/user/missions', async (req, res) => {
+  try {
+    const session = await auth.api.getSession({ headers: req.headers });
+    if (!session) return res.status(401).json({ error: 'Unauthorized' });
+
+    const userId = session.user.id;
+    const user = (await db.select().from(users).where(eq(users.id, userId)).limit(1).execute())[0];
+
+    // Simple procedural missions based on user stats
+    const missions = [
+      { 
+        id: 'dist_1', 
+        title: 'Trailblazer I', 
+        desc: `Walk ${Math.ceil((user?.totalDistance || 0) / 1000) + 2}km total`, 
+        progress: (user?.totalDistance || 0) / 1000, 
+        goal: Math.ceil((user?.totalDistance || 0) / 1000) + 2,
+        icon: 'directions_walk'
+      },
+      { 
+        id: 'tile_1', 
+        title: 'Landlord', 
+        desc: `Capture ${user?.totalTiles + 10} hex tiles`, 
+        progress: user?.totalTiles || 0, 
+        goal: (user?.totalTiles || 0) + 10,
+        icon: 'grid_view'
+      },
+      { 
+        id: 'streak_1', 
+        title: 'Daily Grinder', 
+        desc: `Maintain a ${user?.currentStreak + 1} day streak`, 
+        progress: user?.currentStreak || 0, 
+        goal: (user?.currentStreak || 0) + 1,
+        icon: 'local_fire_department'
+      }
+    ];
+
+    res.json({ success: true, missions });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Socket logic
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
-  // Join specific regional rooms here later
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
   });

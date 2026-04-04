@@ -9,10 +9,11 @@ import 'package:h3_flutter/h3_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 
 late final H3 h3;
 
-const String apiBase = 'https://7fb0-2401-4900-b3dc-66ce-d5e1-7a60-d586-cf53.ngrok-free.app';
+const String apiBase = 'https://537d-2401-4900-b3dc-66ce-d5e1-7a60-d586-cf53.ngrok-free.app';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -407,11 +408,67 @@ class _MainConsoleState extends State<MainConsole> {
   final Map<String, dynamic> _gameTiles = {};
   final List<LatLng> _activeTrail = [];
 
+  List<dynamic> _missions = [];
+  List<dynamic> _leaderboard = [];
+  Map<String, dynamic> _userStats = {};
+  bool _isLoadingData = false;
+
   @override
   void initState() {
     super.initState();
     _initLocationService();
     _initSocket();
+    _fetchAllRealtimeData();
+  }
+
+  Future<void> _fetchAllRealtimeData() async {
+    setState(() => _isLoadingData = true);
+    await Future.wait([
+      _fetchUserStats(),
+      _fetchMissions(),
+      _fetchLeaderboard(),
+    ]);
+    if (mounted) setState(() => _isLoadingData = false);
+  }
+
+  Future<void> _fetchUserStats() async {
+    try {
+      final res = await http.get(
+        Uri.parse('$apiBase/api/user/stats'),
+        headers: {'Authorization': 'Bearer ${widget.sessionToken}'},
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        setState(() {
+          _userStats = data['stats'] ?? {};
+          _userName = _userStats['name'] ?? 'Agent';
+          _totalDistance = (_userStats['totalDistance'] ?? 0).toDouble();
+        });
+      }
+    } catch (e) { print('Error fetching stats: $e'); }
+  }
+
+  Future<void> _fetchMissions() async {
+    try {
+      final res = await http.get(
+        Uri.parse('$apiBase/api/user/missions'),
+        headers: {'Authorization': 'Bearer ${widget.sessionToken}'},
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        setState(() => _missions = data['missions'] ?? []);
+      }
+    } catch (e) { print('Error fetching missions: $e'); }
+  }
+
+  Future<void> _fetchLeaderboard() async {
+    try {
+      final res = await http.get(Uri.parse('$apiBase/api/leaderboard'));
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        setState(() => _leaderboard = data['leaderboard'] ?? []);
+      }
+    } catch (e) { print('Error fetching leaderboard: $e'); }
   }
 
   void _initSocket() {
@@ -462,10 +519,29 @@ class _MainConsoleState extends State<MainConsole> {
     });
 
     // AUTO-TRACKING: always capture on movement
-    Geolocator.getPositionStream(locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 3,
-    )).listen((Position position) {
+    // Note: Configured for background execution
+    late LocationSettings locationSettings;
+    
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      locationSettings = AndroidSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 3,
+        forceLocationManager: true,
+        intervalDuration: const Duration(seconds: 5),
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationText: "GeoClash is capturing your trail in the background!",
+          notificationTitle: "Passive Capture Active",
+          enableWakeLock: true,
+        )
+      );
+    } else {
+      locationSettings = const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 3,
+      );
+    }
+
+    Geolocator.getPositionStream(locationSettings: locationSettings).listen((Position position) {
       final newPos = LatLng(position.latitude, position.longitude);
       if (mounted) {
         setState(() {
@@ -547,12 +623,18 @@ class _MainConsoleState extends State<MainConsole> {
               ),
               children: [
                 TileLayer(
-                  urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                  urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                  userAgentPackageName: 'com.example.geoclash',
+                ),
+                // Add a semi-transparent label layer for streets/cities on top of satellite
+                TileLayer(
+                  urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png',
                   subdomains: const ['a', 'b', 'c', 'd'],
                 ),
                 PolygonLayer(polygons: _buildTerritoryPolygons()),
                 PolylineLayer(
                   polylines: [
+                    if (_activeTrail.length >= 2)
                     Polyline(
                       points: _activeTrail,
                       strokeWidth: 4,
@@ -755,28 +837,88 @@ class _MainConsoleState extends State<MainConsole> {
 
   // ─── MISSIONS VIEW ────────────────────────────────────────
   Widget _buildMissionsView() {
+    final missions = _missions ?? [];
     return _buildPageView('Missions', [
-      _buildCard('Active Missions', 'Walk 2km to unlock daily reward.', Icons.assignment_outlined),
-      _buildCard('Area Log', '${_gameTiles.length} tiles captured so far.', Icons.grid_view_outlined),
-      _buildCard('Daily Goal', '${(_totalDistance / 1000).toStringAsFixed(1)} / 5.0 km completed.', Icons.flag_outlined),
+      if (missions.isEmpty)
+        _buildCard('No Missions', 'Start capturing to unlock active missions.', Icons.assignment_outlined)
+      else
+        ...missions.map((m) {
+          final double progress = ((m['progress'] ?? 0) as num).toDouble();
+          final double goal = ((m['goal'] ?? 0) as num).toDouble();
+          final String unit = (m['id'] ?? '').startsWith('dist') ? 'km' : 'tiles';
+          
+          return _buildCard(
+            m['title'] ?? 'Mission', 
+            '${progress.toStringAsFixed(1)} / ${goal.toStringAsFixed(1)} $unit\n${m['desc'] ?? ''}', 
+            m['icon'] == 'directions_walk' ? Icons.directions_walk : 
+            m['icon'] == 'grid_view' ? Icons.grid_view : Icons.local_fire_department
+          );
+        }),
+      _buildCard('Area Log', '${_gameTiles.length} tiles captured in this session.', Icons.history_edu),
     ]);
   }
 
   // ─── RANKINGS VIEW ────────────────────────────────────────
   Widget _buildRankingsView() {
+    final stats = _userStats ?? {};
+    final leaderboard = _leaderboard ?? [];
+    
     return _buildPageView('Rankings', [
-      _buildCard('Your Rank', '#12 in your city.', Icons.leaderboard_outlined),
-      _buildCard('Total Steps', '$_totalSteps steps today.', Icons.directions_walk),
-      _buildCard('Global Stats', '${_gameTiles.length * 3} players active nearby.', Icons.public),
+      if (stats.isNotEmpty && stats['rank'] != null)
+        _buildCard('Your Global Rank', '#${stats['rank']} of ${stats['totalPlayers'] ?? '?'} players.', Icons.emoji_events_outlined),
+      
+      const SizedBox(height: 10),
+      Text('TOP PLAYERS', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.white38, letterSpacing: 2)),
+      const SizedBox(height: 16),
+      
+      if (leaderboard.isEmpty)
+        _buildCard('Loading...', 'Fetching leaderboard data...', Icons.sync)
+      else
+        ...leaderboard.asMap().entries.map((entry) {
+          final int idx = entry.key;
+          final dynamic u = entry.value;
+          return _buildLeaderboardTile(idx + 1, u['name'] ?? 'Anonymous', u['totalTiles'] ?? 0, u['color']);
+        }),
     ]);
+  }
+
+  Widget _buildLeaderboardTile(int rank, String name, int tiles, String? colorHex) {
+    Color userColor = const Color(0xFF00F0FF);
+    if (colorHex != null) {
+      try { userColor = Color(int.parse(colorHex.replaceFirst('#', '0xFF'))); } catch (e) {}
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1B1F2B),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            child: Text('$rank', style: GoogleFonts.jetBrainsMono(color: rank <= 3 ? const Color(0xFF00F0FF) : Colors.white24, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(width: 8),
+          Container(width: 4, height: 24, decoration: BoxDecoration(color: userColor, borderRadius: BorderRadius.circular(2))),
+          const SizedBox(width: 12),
+          Expanded(child: Text(name, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600))),
+          Text('$tiles TILES', style: GoogleFonts.jetBrainsMono(color: const Color(0xFF2FF801), fontSize: 12, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
   }
 
   // ─── PROFILE VIEW ─────────────────────────────────────────
   Widget _buildProfileView() {
     return _buildPageView('Profile', [
       _buildCard('Account', _userName, Icons.person_outline),
-      _buildCard('Distance', '${(_totalDistance / 1000).toStringAsFixed(2)} km total', Icons.straighten),
-      _buildCard('Territories', '${_gameTiles.length} tiles owned', Icons.hexagon_outlined),
+      _buildCard('Total Distance', '${(_totalDistance / 1000).toStringAsFixed(2)} km walked', Icons.straighten),
+      _buildCard('Territory Control', '${_userStats['totalTiles'] ?? 0} tiles captured', Icons.hexagon_outlined),
+      _buildCard('Season Streak', '${_userStats['currentStreak'] ?? 0} days active', Icons.local_fire_department_outlined),
       const SizedBox(height: 20),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -938,14 +1080,16 @@ class _MainConsoleState extends State<MainConsole> {
         final geoCoords = h3.cellToBoundary(BigInt.parse(h3Index, radix: 16));
         final points = geoCoords.map((coord) => LatLng(coord.lat, coord.lon)).toList();
         
-        polygons.add(
-          Polygon(
-            points: points,
-            color: const Color(0xFF00F0FF).withOpacity(0.15),
-            borderColor: const Color(0xFF00F0FF).withOpacity(0.4),
-            borderStrokeWidth: 1,
-          ),
-        );
+        if (points.length >= 3) {
+          polygons.add(
+            Polygon(
+              points: points,
+              color: const Color(0xFF00F0FF).withOpacity(0.15),
+              borderColor: const Color(0xFF00F0FF).withOpacity(0.4),
+              borderStrokeWidth: 1,
+            ),
+          );
+        }
       } catch (e) {
         print('Error parsing H3 boundary: $e');
       }
@@ -960,14 +1104,16 @@ class _MainConsoleState extends State<MainConsole> {
       final geoCoords = h3.cellToBoundary(userHex);
       final points = geoCoords.map((coord) => LatLng(coord.lat, coord.lon)).toList();
       
-      polygons.add(
-        Polygon(
-          points: points,
-          color: const Color(0xFF00F0FF).withOpacity(0.1),
-          borderColor: const Color(0xFF00F0FF).withOpacity(0.3),
-          borderStrokeWidth: 1,
-        )
-      );
+      if (points.length >= 3) {
+        polygons.add(
+          Polygon(
+            points: points,
+            color: const Color(0xFF00F0FF).withOpacity(0.1),
+            borderColor: const Color(0xFF00F0FF).withOpacity(0.3),
+            borderStrokeWidth: 1,
+          )
+        );
+      }
     } catch (e) {}
 
     return polygons;
