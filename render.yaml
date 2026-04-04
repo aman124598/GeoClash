@@ -1,6 +1,7 @@
 services:
   - type: web
     name: geoclash-backend
+    rootDir: backend
     runtime: node
     buildCommand: npm install && npm run build
     startCommand: npm run start
