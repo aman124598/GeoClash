@@ -13,7 +13,7 @@ import 'package:flutter/foundation.dart';
 
 late final H3 h3;
 
-const String apiBase = 'https://537d-2401-4900-b3dc-66ce-d5e1-7a60-d586-cf53.ngrok-free.app';
+const String apiBase = 'https://geoclash.onrender.com';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
