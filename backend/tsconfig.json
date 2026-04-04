@@ -11,6 +11,6 @@
     "types": ["node"],
     "ignoreDeprecations": "6.0"
   },
-  "include": ["src/**/*", "drizzle.config.ts"],
-  "exclude": ["node_modules"]
+  "include": ["src/index.ts", "src/auth.ts", "src/db/**/*"],
+  "exclude": ["node_modules", "src/fix_db.ts", "src/force_reset.ts", "drizzle.config.ts"]
 }
