@@ -3,6 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "./db";
 import * as schema from "./db/schema";
 import { dash } from "@better-auth/infra";
+import { bearer } from "better-auth/plugins";
 
 export const auth = betterAuth({
     database: drizzleAdapter(db, {
@@ -19,6 +20,18 @@ export const auth = betterAuth({
     },
     plugins: [
         dash(),
+        bearer(),
     ],
-    trustedOrigins: ["http://localhost:*", "http://127.0.0.1:*"],
+    baseURL: process.env.BETTER_AUTH_URL || "https://geoclash.onrender.com",
+    trustedOrigins: [
+        "http://localhost:*", 
+        "http://127.0.0.1:*",
+        "https://geoclash.onrender.com",
+        "https://*.geoclash.onrender.com",
+        "capacitor://*", // For mobile-like origins
+        "http://localhost" // Android emulator
+    ],
+    advanced: {
+        disableCSRFCheck: true // Essential for mobile app requests
+    }
 });

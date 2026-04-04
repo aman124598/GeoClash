@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:ui';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -148,33 +149,49 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final response = await http.post(
         Uri.parse(endpoint),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
         body: jsonEncode(body),
-      );
+      ).timeout(const Duration(seconds: 15));
 
-      if (response.statusCode == 200) {
+      if (response.statusCode >= 200 && response.statusCode < 300) {
         final data = jsonDecode(response.body);
-        final token = data['token'] ?? data['session']?['token'];
+        
+        // Better Auth 1.x can return token in several places depending on plugins
+        String? token = data['token'] ?? 
+                        data['sessionToken'] ?? 
+                        data['session']?['token'] ?? 
+                        data['session']?['id'];
+
+        if (token == null && response.headers.containsKey('set-cookie')) {
+          final cookies = response.headers['set-cookie']!;
+          final match = RegExp(r'better-auth\.session_token=([^;]+)').firstMatch(cookies);
+          token = match?.group(1);
+        }
+
         if (token != null) {
           widget.onLoginSuccess(token);
         } else {
-          // Try to extract from set-cookie header
-          final cookies = response.headers['set-cookie'];
-          if (cookies != null) {
-            widget.onLoginSuccess(cookies);
-          } else {
-            setState(() { _error = 'Login succeeded but no token received'; _isLoading = false; });
-          }
+          setState(() { _error = 'Login succeeded but no token detected'; _isLoading = false; });
         }
       } else {
-        final data = jsonDecode(response.body);
-        setState(() {
-          _error = data['message'] ?? data['error'] ?? 'Authentication failed';
-          _isLoading = false;
-        });
+        String msg = 'Authentication failed (${response.statusCode})';
+        try {
+          final errData = jsonDecode(response.body);
+          msg = errData['message'] ?? errData['error'] ?? msg;
+        } catch (_) {
+          if (response.body.contains('<html')) {
+            msg = 'Server error. Please try again later.';
+          } else if (response.body.isNotEmpty) {
+             msg = response.body.length > 60 ? '${response.body.substring(0,60)}...' : response.body;
+          }
+        }
+        setState(() { _error = msg; _isLoading = false; });
       }
     } catch (e) {
-      setState(() { _error = 'Connection error: $e'; _isLoading = false; });
+      setState(() { _error = 'Network error: $e'; _isLoading = false; });
     }
   }
 
@@ -208,11 +225,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    'GEOCLASH',
+                    'NAVIGATOR',
                     style: GoogleFonts.inter(
                       fontSize: 32,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 8,
+                      letterSpacing: 4,
                       color: const Color(0xFF00F0FF),
                     ),
                   ),
