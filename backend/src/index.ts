@@ -75,7 +75,7 @@ app.get('/api/leaderboard', async (req, res) => {
 app.post('/api/capture', async (req, res) => {
   try {
     const session = await auth.api.getSession({
-      headers: req.headers,
+      headers: req.headers as any,
     });
     if (!session) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -198,7 +198,7 @@ app.post('/api/capture', async (req, res) => {
 // GET User Stats
 app.get('/api/user/stats', async (req, res) => {
   try {
-    const session = await auth.api.getSession({ headers: req.headers });
+    const session = await auth.api.getSession({ headers: req.headers as any });
     if (!session) return res.status(401).json({ error: 'Unauthorized' });
 
     const userId = session.user.id;
@@ -227,7 +227,7 @@ app.get('/api/user/stats', async (req, res) => {
 // GET User Missions (Real-time generated based on stats)
 app.get('/api/user/missions', async (req, res) => {
   try {
-    const session = await auth.api.getSession({ headers: req.headers });
+    const session = await auth.api.getSession({ headers: req.headers as any });
     if (!session) return res.status(401).json({ error: 'Unauthorized' });
 
     const userId = session.user.id;
@@ -246,7 +246,7 @@ app.get('/api/user/missions', async (req, res) => {
       { 
         id: 'tile_1', 
         title: 'Landlord', 
-        desc: `Capture ${user?.totalTiles + 10} hex tiles`, 
+        desc: `Capture ${(user?.totalTiles ?? 0) + 10} hex tiles`, 
         progress: user?.totalTiles || 0, 
         goal: (user?.totalTiles || 0) + 10,
         icon: 'grid_view'
@@ -254,7 +254,7 @@ app.get('/api/user/missions', async (req, res) => {
       { 
         id: 'streak_1', 
         title: 'Daily Grinder', 
-        desc: `Maintain a ${user?.currentStreak + 1} day streak`, 
+        desc: `Maintain a ${(user?.currentStreak ?? 0) + 1} day streak`, 
         progress: user?.currentStreak || 0, 
         goal: (user?.currentStreak || 0) + 1,
         icon: 'local_fire_department'
