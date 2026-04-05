@@ -11,6 +11,7 @@ export const users = pgTable('users', {
   color: text('color').default('#FF6B6B'),
   totalTiles: integer('totalTiles').default(0),
   totalDistance: real('totalDistance').default(0),
+  totalSteps: integer('totalSteps').default(0),
   currentStreak: integer('currentStreak').default(0),
   longestStreak: integer('longestStreak').default(0),
   lastActiveAt: timestamp('lastActiveAt', { mode: 'date' }),
@@ -93,6 +94,7 @@ export const dailyStats = pgTable('daily_stats', {
   date: date('date').notNull(), // format YYYY-MM-DD
   tilesCaptured: integer('tiles_captured').default(0),
   distanceTraveled: real('distance_traveled').default(0),
+  steps: integer('steps').default(0),
   updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow(),
 }, (t) => ({
   userDateIdx: index('daily_user_date_idx').on(t.userId, t.date),

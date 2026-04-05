@@ -42,6 +42,8 @@ dependencies:
   h3_flutter: ^0.7.1
   google_fonts: ^6.2.1
   shared_preferences: ^2.3.4
+  health: ^13.3.1
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:

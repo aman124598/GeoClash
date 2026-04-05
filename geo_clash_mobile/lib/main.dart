@@ -11,6 +11,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
+import 'package:health/health.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 late final H3 h3;
 
@@ -19,6 +21,7 @@ const String apiBase = 'https://geoclash.onrender.com';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   h3 = const H3Factory().load();
+  Health().configure(useHealthConnectIfAvailable: true);
   runApp(const GeoClashApp());
 }
 
@@ -392,7 +395,7 @@ class _LoginScreenState extends State<LoginScreen> {
 }
 
 // ─── MAIN CONSOLE (tabs) ───────────────────────────────────
-enum AppView { map, missions, rankings, profile }
+enum AppView { map, missions, rankings, history, profile }
 
 class MainConsole extends StatefulWidget {
   final String sessionToken;
@@ -419,6 +422,7 @@ class _MainConsoleState extends State<MainConsole> {
 
   List<dynamic> _missions = [];
   List<dynamic> _leaderboard = [];
+  List<dynamic> _history = [];
   Map<String, dynamic> _userStats = {};
   bool _isLoadingData = false;
 
@@ -427,7 +431,44 @@ class _MainConsoleState extends State<MainConsole> {
     super.initState();
     _initLocationService();
     _initSocket();
+    _syncHealthData();
     _fetchAllRealtimeData();
+  }
+
+  Future<void> _syncHealthData() async {
+    try {
+      final types = [HealthDataType.STEPS];
+      
+      bool? hasPermissions = await Health().hasPermissions(types);
+      if (hasPermissions != true) {
+        await Health().requestAuthorization(types);
+      }
+      
+      final PermissionStatus actPerm = await Permission.activityRecognition.request();
+      if (actPerm.isGranted) {
+        final now = DateTime.now();
+        final midnight = DateTime(now.year, now.month, now.day);
+        
+        int? steps = await Health().getTotalStepsInInterval(midnight, now);
+        if (steps != null) {
+          setState(() => _totalSteps = steps);
+          
+          await http.post(
+            Uri.parse('$apiBase/api/sync-steps'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ${widget.sessionToken}',
+            },
+            body: jsonEncode({
+               'steps': steps,
+               'date': '${now.year}-${now.month.toString().padLeft(2,'0')}-${now.day.toString().padLeft(2,'0')}',
+            }),
+          );
+        }
+      }
+    } catch(e) {
+      print('Health Sync Error: $e');
+    }
   }
 
   Future<void> _fetchAllRealtimeData() async {
@@ -436,8 +477,22 @@ class _MainConsoleState extends State<MainConsole> {
       _fetchUserStats(),
       _fetchMissions(),
       _fetchLeaderboard(),
+      _fetchHistory(),
     ]);
     if (mounted) setState(() => _isLoadingData = false);
+  }
+
+  Future<void> _fetchHistory() async {
+    try {
+      final res = await http.get(
+        Uri.parse('$apiBase/api/user/history'),
+        headers: {'Authorization': 'Bearer ${widget.sessionToken}'},
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        setState(() => _history = data['history'] ?? []);
+      }
+    } catch (e) { print('Error fetching history: $e'); }
   }
 
   Future<void> _fetchUserStats() async {
@@ -451,7 +506,15 @@ class _MainConsoleState extends State<MainConsole> {
         setState(() {
           _userStats = data['stats'] ?? {};
           _userName = _userStats['name'] ?? 'Agent';
-          _totalDistance = (_userStats['totalDistance'] ?? 0).toDouble();
+          
+          // Use todayDistance instead of totalDistance for daily resets.
+          // We only update if the server value is higher to ensure we don't 
+          // overwrite local steps accumulated while moving during poor network.
+          final serverTodayDistance = (_userStats['todayDistance'] ?? 0).toDouble();
+          if (serverTodayDistance > _totalDistance) {
+            _totalDistance = serverTodayDistance;
+            _totalSteps = (_totalDistance / 0.75).round();
+          }
         });
       }
     } catch (e) { print('Error fetching stats: $e'); }
@@ -551,21 +614,40 @@ class _MainConsoleState extends State<MainConsole> {
     }
 
     Geolocator.getPositionStream(locationSettings: locationSettings).listen((Position position) {
+      if (!mounted) return;
+      
+      // BUG FIX: Prevent "shaking" and sitting still from increasing steps
+      // 1. Ignore points worse than 20m accuracy.
+      if (position.accuracy > 20.0) return;
+      // 2. If the physical velocity of the device is nearly 0, it is indoor drift.
+      // 0.3 m/s is roughly 1 km/h. Standard walking is ~1.4 m/s.
+      if (position.speed < 0.3) return;
+
       final newPos = LatLng(position.latitude, position.longitude);
-      if (mounted) {
-        setState(() {
-          // Track distance
-          if (_lastPosition != null) {
-            final d = const Distance().as(LengthUnit.Meter, _lastPosition!, newPos);
+      bool positionUpdated = false;
+
+      setState(() {
+        if (_lastPosition != null) {
+          final d = const Distance().as(LengthUnit.Meter, _lastPosition!, newPos);
+          
+          // 3. Only count distances greater than 3.5 meters to prevent micro-drift false steps.
+          if (d >= 3.5 && d < 100.0) {
             _totalDistance += d;
-            // Rough step estimate: 1 step ≈ 0.75m
             _totalSteps = (_totalDistance / 0.75).round();
+            _lastPosition = newPos;
+            _currentPosition = newPos;
+            _activeTrail.add(newPos);
+            positionUpdated = true;
           }
+        } else {
           _lastPosition = newPos;
           _currentPosition = newPos;
-          _activeTrail.add(newPos);
-        });
-        // Auto-sync every position to backend
+          positionUpdated = true;
+        }
+      });
+      
+      // Auto-sync every valid position to backend
+      if (positionUpdated) {
         _syncCapture(position);
       }
     });
@@ -609,6 +691,7 @@ class _MainConsoleState extends State<MainConsole> {
               _buildMapView(),
               _buildMissionsView(),
               _buildRankingsView(),
+              _buildHistoryView(),
               _buildProfileView(),
             ],
           ),
@@ -929,6 +1012,62 @@ class _MainConsoleState extends State<MainConsole> {
     );
   }
 
+  // ─── HISTORY VIEW ─────────────────────────────────────────
+  Widget _buildHistoryView() {
+    return _buildPageView('History Log', [
+      _buildCard('Daily Activity Tracker', 'Integrated with Health Connect', Icons.monitor_heart),
+      const SizedBox(height: 10),
+      Text('PAST WEEKS / MONTHS', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.white38, letterSpacing: 2)),
+      const SizedBox(height: 16),
+      if (_history.isEmpty)
+         _buildCard('No History', 'Syncing your past records or none available.', Icons.history_toggle_off)
+      else
+         ..._history.map((record) {
+            return _buildHistoryItem(record);
+         }),
+    ]);
+  }
+
+  Widget _buildHistoryItem(dynamic record) {
+     final String date = record['date'] ?? 'N/A';
+     final int steps = record['steps'] ?? 0;
+     final double dist = ((record['distanceTraveled'] ?? 0) as num).toDouble();
+     final int tiles = record['tilesCaptured'] ?? 0;
+
+     return Container(
+       margin: const EdgeInsets.only(bottom: 12),
+       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+       decoration: BoxDecoration(
+         color: const Color(0xFF1B1F2B),
+         borderRadius: BorderRadius.circular(12),
+         border: Border.all(color: Colors.white.withOpacity(0.05)),
+       ),
+       child: Row(
+         children: [
+           Container(
+             width: 44, height: 44,
+             decoration: BoxDecoration(color: const Color(0xFF2FF801).withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+             child: const Icon(Icons.calendar_today, color: Color(0xFF2FF801), size: 20),
+           ),
+           const SizedBox(width: 16),
+           Expanded(
+             child: Column(
+               crossAxisAlignment: CrossAxisAlignment.start,
+               children: [
+                 Text(date, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
+                 const SizedBox(height: 2),
+                 Text('${(dist/1000).toStringAsFixed(2)} km  •  $tiles tiles', style: GoogleFonts.inter(color: Colors.white54, fontSize: 12)),
+               ],
+             ),
+           ),
+           Text('$steps', style: GoogleFonts.jetBrainsMono(color: const Color(0xFF00F0FF), fontSize: 16, fontWeight: FontWeight.bold)),
+           const SizedBox(width: 4),
+           Text('STEPS', style: GoogleFonts.inter(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.w800)),
+         ],
+       ),
+     );
+  }
+
   // ─── PROFILE VIEW ─────────────────────────────────────────
   Widget _buildProfileView() {
     return _buildPageView('Profile', [
@@ -1040,6 +1179,7 @@ class _MainConsoleState extends State<MainConsole> {
                 children: [
                   _buildNavItem(AppView.map, Icons.map_outlined, 'Map'),
                   _buildNavItem(AppView.missions, Icons.flag_outlined, 'Missions'),
+                  _buildNavItem(AppView.history, Icons.history_outlined, 'History'),
                   _buildNavItem(AppView.rankings, Icons.leaderboard_outlined, 'Rankings'),
                   _buildNavItem(AppView.profile, Icons.person_outline, 'Profile'),
                 ],

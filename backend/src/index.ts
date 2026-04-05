@@ -267,10 +267,83 @@ app.get('/api/user/stats', async (req, res) => {
       stats: {
         ...user,
         todayDistance: todayStats?.distanceTraveled || 0,
+        todaySteps: todayStats?.steps || 0,
         rank,
         totalPlayers: allUsers.length
       }
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET User History
+app.get('/api/user/history', async (req, res) => {
+  try {
+    const session = await auth.api.getSession({ headers: req.headers as any });
+    if (!session) return res.status(401).json({ error: 'Unauthorized' });
+
+    const userId = session.user.id;
+    const history = await db.select().from(dailyStats)
+      .where(eq(dailyStats.userId, userId))
+      .orderBy(desc(dailyStats.date))
+      .limit(30)
+      .execute();
+
+    res.json({ success: true, history });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Sync Steps Endpoint
+app.post('/api/sync-steps', async (req, res) => {
+  try {
+    const session = await auth.api.getSession({ headers: req.headers as any });
+    if (!session) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { steps, date } = req.body;
+    if (steps == null || !date) {
+      return res.status(400).json({ error: 'Missing steps or date' });
+    }
+
+    const userId = session.user.id;
+    const stepsDelta = steps; // from device
+
+    // Upsert Daily stats
+    await db.transaction(async (tx) => {
+        // Find existing to compute delta for total
+        const existing = (await tx.select().from(dailyStats).where(and(eq(dailyStats.userId, userId), eq(dailyStats.date, date))).limit(1).execute())[0];
+        
+        let delta = steps;
+        if (existing) {
+          delta = steps - (existing.steps || 0);
+          if (delta < 0) delta = 0; // Prevent reverse if device resets
+        }
+
+        if (delta > 0) {
+          await tx.update(users).set({ 
+              totalSteps: sql`${users.totalSteps} + ${delta}`,
+              lastActiveAt: new Date()
+          }).where(eq(users.id, userId));
+        }
+
+        await tx.insert(dailyStats).values({
+            userId,
+            date: date,
+            steps: steps,
+            distanceTraveled: 0,
+            tilesCaptured: 0,
+        }).onConflictDoUpdate({
+            target: [dailyStats.userId, dailyStats.date],
+            set: {
+                steps: sql`GREATEST(${dailyStats.steps}, ${steps})`,
+                updatedAt: new Date()
+            }
+        });
+    });
+
+    res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
